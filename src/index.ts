@@ -55,7 +55,7 @@ export class CardDO extends DurableObject {
     // ----------------------------------------
 
     // A. WebSocket 连接路由
-    this.app.get('/:actionId/ws', async (c) => {
+    this.app.get('/:actionId', async (c) => {
       if (c.req.header('Upgrade') !== 'websocket') {
         return c.text('Expected Upgrade: websocket', 426)
       }
@@ -69,7 +69,7 @@ export class CardDO extends DurableObject {
     })
 
     // B. 数据写入路由
-    this.app.post('/:actionId/card', async (c) => {
+    this.app.post('/:actionId', async (c) => {
       const card = await c.req.json<Card>()
 
       await this.ctx.storage.put('card', card)
@@ -78,7 +78,7 @@ export class CardDO extends DurableObject {
       return c.text('success', 200)
     })
 
-    this.app.delete('/:actionId/card', async (c) => {
+    this.app.delete('/:actionId', async (c) => {
       await this.ctx.storage.delete('card')
       this.broadcast({ action: "CLEAR_CARD" })
       return c.text("success", 200)
