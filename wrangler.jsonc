@@ -1,0 +1,69 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "aimeio-backend-ws",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-02-08",
+  // "compatibility_flags": [
+  //   "nodejs_compat"
+  // ],
+  // "vars": {
+  //   "MY_VAR": "my-variable"
+  // },
+  // "kv_namespaces": [
+  //   {
+  //     "binding": "MY_KV_NAMESPACE",
+  //     "id": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+  //   }
+  // ],
+  // "r2_buckets": [
+  //   {
+  //     "binding": "MY_BUCKET",
+  //     "bucket_name": "my-bucket"
+  //   }
+  // ],
+  // "d1_databases": [
+  //   {
+  //     "binding": "MY_DB",
+  //     "database_name": "my-database",
+  //     "database_id": ""
+  //   }
+  // ],
+  // "ai": {
+  //   "binding": "AI"
+  // },
+  // "observability": {
+  //   "enabled": true,
+  //   "head_sampling_rate": 1
+  // }
+  // =================================================================
+  // Durable Objects 配置 (核心部分)
+  // =================================================================
+  "durable_objects": {
+    "bindings": [
+      {
+        // 1. name: 在代码 env.CARD_DO 中使用的变量名
+        "name": "CARD_DO",
+        // 2. class_name: 导出的类名 (export class CardDO)
+        "class_name": "CardDO"
+      }
+    ]
+  },
+  // =================================================================
+  // 数据库迁移配置 (DO 必须配置这个才能创建)
+  // =================================================================
+  "migrations": [
+    {
+      "tag": "v1-init", // 这里的 tag 名字随意，只要唯一即可
+      "new_classes": [
+        "CardDO"
+      ] // 首次部署必须列出新创建的类
+    }
+    // 如果以后要改名或删除类，需要在这里追加新的迁移块
+  ],
+  // =================================================================
+  // 日志观测 (推荐开启)
+  // =================================================================
+  "observability": {
+    "enabled": true
+  }
+}
