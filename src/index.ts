@@ -44,6 +44,7 @@ export default app
 export class CardDO extends DurableObject {
   // 定义内部的 Hono 实例
   app: Hono = new Hono()
+  currentCard: Card | null = null
 
   constructor(ctx: DurableObjectState, env: Bindings) {
     super(ctx, env)
@@ -65,21 +66,37 @@ export class CardDO extends DurableObject {
 
       // 接受连接 (Hibernation API)
       this.ctx.acceptWebSocket(server)
+
+      // 新连接建立时，如果当前有卡片，立即推送给新客户端
+      if (this.currentCard) {
+        try {
+          server.send(JSON.stringify({ action: "SET_CARD", body: this.currentCard }))
+        } catch (e) {
+          // 忽略
+        }
+      }
+
       return new Response(null, { status: 101, webSocket: client })
     })
 
     // B. 数据写入路由
     this.app.post('/:actionId', async (c) => {
+      // 检查是否有活跃的 WebSocket 连接，若没有则拒绝，避免资源浪费与被刷
+      const websockets = this.ctx.getWebSockets()
+      if (websockets.length === 0) {
+        return c.text('No active client connected', 404)
+      }
+
       const card = await c.req.json<Card>()
 
-      await this.ctx.storage.put('card', card)
+      this.currentCard = card
       this.broadcast({ action: "SET_CARD", body: card })
 
       return c.text('success', 200)
     })
 
     this.app.delete('/:actionId', async (c) => {
-      await this.ctx.storage.delete('card')
+      this.currentCard = null
       this.broadcast({ action: "CLEAR_CARD" })
       return c.text("success", 200)
     })
