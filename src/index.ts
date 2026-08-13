@@ -1,7 +1,7 @@
 import { Hono } from 'hono'
 import { cors } from 'hono/cors'
 import { DurableObject } from 'cloudflare:workers'
-import { normalizeStateMessage, type RelayMessage } from './relay'
+import { capabilitiesFromRequest, messageForClient, normalizeStateMessage, type ClientCapabilities, type RelayMessage } from './relay'
 
 // ==========================================
 // 1. 类型定义
@@ -32,7 +32,6 @@ export class CardDO extends DurableObject {
   // 定义内部的 Hono 实例
   app: Hono = new Hono()
   currentStateMessage: RelayMessage | null = null
-
   constructor(ctx: DurableObjectState, env: Bindings) {
     super(ctx, env)
 
@@ -53,11 +52,12 @@ export class CardDO extends DurableObject {
 
       // 接受连接 (Hibernation API)
       this.ctx.acceptWebSocket(server)
+      server.serializeAttachment(capabilitiesFromRequest(c.req.raw))
 
       // 新连接建立时，只重发状态通道的最后一条消息。
       if (this.currentStateMessage) {
         try {
-          server.send(JSON.stringify(this.currentStateMessage))
+          server.send(JSON.stringify(messageForClient(this.currentStateMessage, capabilitiesForSocket(server))))
         } catch (e) {
           // 忽略
         }
@@ -74,7 +74,7 @@ export class CardDO extends DurableObject {
       }
 
       const message = await c.req.json<unknown>()
-      this.broadcast(message)
+      this.broadcast(message, false)
 
       return c.text('success', 200)
     })
@@ -111,16 +111,13 @@ export class CardDO extends DurableObject {
 
 
   // === 辅助方法：广播 ===
-  async broadcast(data: unknown) {
+  async broadcast(data: unknown, state = true) {
     const websockets = this.ctx.getWebSockets()
     if (websockets.length > 0) {
-      const message = JSON.stringify(data)
-      if (message === undefined) {
-        return
-      }
+      const normalized = state ? normalizeStateMessage(data) : data as RelayMessage
       websockets.forEach(ws => {
         try {
-          ws.send(message)
+          ws.send(JSON.stringify(messageForClient(normalized, capabilitiesForSocket(ws))))
         } catch (e) {
           // 忽略发送失败
         }
@@ -144,6 +141,18 @@ export class CardDO extends DurableObject {
   }
 
   async webSocketClose(ws: WebSocket, code: number, reason: string, wasClean: boolean) {
-    // 自动清理，一般不需要写代码
+    // Attachments are discarded automatically when the socket closes.
+  }
+}
+
+function capabilitiesForSocket(ws: WebSocket): ClientCapabilities {
+  const attachment = ws.deserializeAttachment()
+  if (typeof attachment !== 'object' || attachment === null) {
+    return { cardProtocol: 1, clientVersion: 'legacy' }
+  }
+  const value = attachment as Partial<ClientCapabilities>
+  return {
+    cardProtocol: typeof value.cardProtocol === 'number' ? value.cardProtocol : 1,
+    clientVersion: typeof value.clientVersion === 'string' ? value.clientVersion : 'legacy',
   }
 }
