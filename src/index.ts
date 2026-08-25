@@ -1,7 +1,16 @@
 import { Hono } from 'hono'
 import { cors } from 'hono/cors'
 import { DurableObject } from 'cloudflare:workers'
-import { capabilitiesFromRequest, messageForClient, normalizeStateMessage, type ClientCapabilities, type RelayMessage } from './relay'
+import {
+  capabilitiesForAttachment,
+  capabilitiesFromRequest,
+  messageForClient,
+  normalizeStateMessage,
+  routeWebSocketMessage,
+  type ClientCapabilities,
+  type ClientRole,
+  type RelayMessage,
+} from './relay'
 
 // ==========================================
 // 1. 类型定义
@@ -50,14 +59,15 @@ export class CardDO extends DurableObject {
       const pair = new WebSocketPair()
       const [client, server] = Object.values(pair)
 
+      const capabilities = capabilitiesFromRequest(c.req.raw)
       // 接受连接 (Hibernation API)
       this.ctx.acceptWebSocket(server)
-      server.serializeAttachment(capabilitiesFromRequest(c.req.raw))
+      server.serializeAttachment(capabilities)
 
-      // 新连接建立时，只重发状态通道的最后一条消息。
-      if (this.currentStateMessage) {
+      // 新连接建立时，如果是 agent，只重发状态通道的最后一条消息。
+      if (this.currentStateMessage && capabilities.role === 'agent') {
         try {
-          server.send(JSON.stringify(messageForClient(this.currentStateMessage, capabilitiesForSocket(server))))
+          server.send(JSON.stringify(messageForClient(this.currentStateMessage, capabilities)))
         } catch (e) {
           // 忽略
         }
@@ -66,24 +76,23 @@ export class CardDO extends DurableObject {
       return new Response(null, { status: 101, webSocket: client })
     })
 
-    // B. 事件写入路由：只广播，不保存、不重发。
+    // B. 事件写入路由：只向 Agent 广播，不保存、不重发。
     this.app.post('/:actionId/event', async (c) => {
-      const websockets = this.ctx.getWebSockets()
-      if (websockets.length === 0) {
+      const agentWebsockets = this.ctx.getWebSockets().filter(ws => capabilitiesForSocket(ws).role === 'agent')
+      if (agentWebsockets.length === 0) {
         return c.text('No active client connected', 404)
       }
 
       const message = await c.req.json<unknown>()
-      this.broadcast(message, false)
+      this.broadcast(message, false, 'agent')
 
       return c.text('success', 200)
     })
 
     // C. 状态写入路由
     this.app.post('/:actionId', async (c) => {
-      // 检查是否有活跃的 WebSocket 连接，若没有则拒绝，避免资源浪费与被刷
-      const websockets = this.ctx.getWebSockets()
-      if (websockets.length === 0) {
+      const agentWebsockets = this.ctx.getWebSockets().filter(ws => capabilitiesForSocket(ws).role === 'agent')
+      if (agentWebsockets.length === 0) {
         return c.text('No active client connected', 404)
       }
 
@@ -91,31 +100,31 @@ export class CardDO extends DurableObject {
       const message = normalizeStateMessage(payload)
 
       this.currentStateMessage = message
-      this.broadcast(message)
+      this.broadcast(message, true, 'agent')
 
       return c.text('success', 200)
     })
 
     this.app.delete('/:actionId', async (c) => {
       this.currentStateMessage = null
-      this.broadcast({ action: "CLEAR_CARD" })
-      return c.text("success", 200)
+      this.broadcast({ action: 'CLEAR_CARD' }, true, 'agent')
+      return c.text('success', 200)
     })
 
-
-
-    // C. 404 处理 (可选)
+    // D. 404 处理 (可选)
     this.app.get('*', (c) => c.text('DO Not Found', 404))
   }
 
-
-
   // === 辅助方法：广播 ===
-  async broadcast(data: unknown, state = true) {
+  async broadcast(data: unknown, state = true, targetRole?: ClientRole) {
     const websockets = this.ctx.getWebSockets()
-    if (websockets.length > 0) {
+    const targets = targetRole
+      ? websockets.filter(ws => capabilitiesForSocket(ws).role === targetRole)
+      : websockets
+
+    if (targets.length > 0) {
       const normalized = state ? normalizeStateMessage(data) : data as RelayMessage
-      websockets.forEach(ws => {
+      targets.forEach(ws => {
         try {
           ws.send(JSON.stringify(messageForClient(normalized, capabilitiesForSocket(ws))))
         } catch (e) {
@@ -136,8 +145,21 @@ export class CardDO extends DurableObject {
 
   // 2. WebSocket 事件 (Hono 不处理这里，必须写在类方法里)
   async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer) {
-    // 处理客户端发来的消息 (如果有)
-    // ws.send(`[Echo] ${message}`) 
+    const senderCaps = capabilitiesForSocket(ws)
+    const websockets = this.ctx.getWebSockets()
+    const socketItems = websockets.map(socket => ({
+      socket,
+      capabilities: capabilitiesForSocket(socket),
+    }))
+
+    const routed = routeWebSocketMessage(senderCaps, message, socketItems, ws)
+    for (const { socket, payload } of routed) {
+      try {
+        socket.send(payload)
+      } catch (e) {
+        // 忽略发送失败
+      }
+    }
   }
 
   async webSocketClose(ws: WebSocket, code: number, reason: string, wasClean: boolean) {
@@ -146,13 +168,6 @@ export class CardDO extends DurableObject {
 }
 
 function capabilitiesForSocket(ws: WebSocket): ClientCapabilities {
-  const attachment = ws.deserializeAttachment()
-  if (typeof attachment !== 'object' || attachment === null) {
-    return { cardProtocol: 1, clientVersion: 'legacy' }
-  }
-  const value = attachment as Partial<ClientCapabilities>
-  return {
-    cardProtocol: typeof value.cardProtocol === 'number' ? value.cardProtocol : 1,
-    clientVersion: typeof value.clientVersion === 'string' ? value.clientVersion : 'legacy',
-  }
+  return capabilitiesForAttachment(ws.deserializeAttachment())
 }
+

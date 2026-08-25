@@ -2,9 +2,12 @@ export type RelayMessage = Record<string, unknown> & {
   action: string
 }
 
+export type ClientRole = 'agent' | 'controller'
+
 export type ClientCapabilities = {
   cardProtocol: number
   clientVersion: string
+  role: ClientRole
 }
 
 export function normalizeStateMessage(value: unknown): RelayMessage {
@@ -18,7 +21,7 @@ export function normalizeStateMessage(value: unknown): RelayMessage {
   }
 }
 
-function isActionMessage(value: unknown): value is RelayMessage {
+export function isActionMessage(value: unknown): value is RelayMessage {
   return (
     typeof value === 'object' &&
     value !== null &&
@@ -30,10 +33,72 @@ function isActionMessage(value: unknown): value is RelayMessage {
 export function capabilitiesFromRequest(request: Request): ClientCapabilities {
   const url = new URL(request.url)
   const cardProtocol = Number(url.searchParams.get('card_protocol') ?? '1')
+  const roleParam = url.searchParams.get('role')?.trim().toLowerCase()
+  const role: ClientRole = roleParam === 'controller' ? 'controller' : 'agent'
   return {
     cardProtocol: Number.isFinite(cardProtocol) ? cardProtocol : 1,
     clientVersion: url.searchParams.get('client_version') ?? 'legacy',
+    role,
   }
+}
+
+export function capabilitiesForAttachment(attachment: unknown): ClientCapabilities {
+  if (typeof attachment !== 'object' || attachment === null) {
+    return { cardProtocol: 1, clientVersion: 'legacy', role: 'agent' }
+  }
+  const value = attachment as Partial<ClientCapabilities>
+  return {
+    cardProtocol: typeof value.cardProtocol === 'number' ? value.cardProtocol : 1,
+    clientVersion: typeof value.clientVersion === 'string' ? value.clientVersion : 'legacy',
+    role: value.role === 'controller' ? 'controller' : 'agent',
+  }
+}
+
+export function getTargetRole(role: ClientRole): ClientRole {
+  return role === 'controller' ? 'agent' : 'controller'
+}
+
+export function prepareMessageForClient(
+  message: string | ArrayBuffer,
+  capabilities: ClientCapabilities
+): string | ArrayBuffer {
+  if (typeof message !== 'string') {
+    return message
+  }
+  try {
+    const parsed = JSON.parse(message)
+    if (isActionMessage(parsed)) {
+      const transformed = messageForClient(parsed, capabilities)
+      if (transformed !== parsed) {
+        return JSON.stringify(transformed)
+      }
+    }
+  } catch {
+    // Not valid JSON, keep original string
+  }
+  return message
+}
+
+export function routeWebSocketMessage<T>(
+  senderCaps: ClientCapabilities,
+  message: string | ArrayBuffer,
+  sockets: Array<{ socket: T; capabilities: ClientCapabilities }>,
+  senderSocket?: T
+): Array<{ socket: T; payload: string | ArrayBuffer }> {
+  const targetRole = getTargetRole(senderCaps.role)
+  const results: Array<{ socket: T; payload: string | ArrayBuffer }> = []
+
+  for (const item of sockets) {
+    if (senderSocket && item.socket === senderSocket) {
+      continue
+    }
+    if (item.capabilities.role === targetRole) {
+      const payload = prepareMessageForClient(message, item.capabilities)
+      results.push({ socket: item.socket, payload })
+    }
+  }
+
+  return results
 }
 
 export function messageForClient(message: RelayMessage, capabilities: ClientCapabilities): RelayMessage {
@@ -60,3 +125,4 @@ export function messageForClient(message: RelayMessage, capabilities: ClientCapa
 function isRecord(value: unknown): value is Record<string, any> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
+
