@@ -16,6 +16,7 @@ npm run cf-typegen
 Remote relay endpoints:
 
 - `GET /<id>` upgrades to the state WebSocket and replays the last state message.
+- `GET /<id>/capabilities` returns the connected AimeIO agent capabilities so HTTP controllers can choose compatible Banapass fields.
 - `POST /<id>` stores and broadcasts a state message. A body with `action` is forwarded unchanged; a legacy Card body is wrapped as `SET_CARD`.
 - `POST /<id>/event` broadcasts an event without storing it or replaying it to later connections.
 - `DELETE /<id>` clears the stored state and broadcasts `CLEAR_CARD`.

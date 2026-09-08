@@ -76,6 +76,21 @@ export class CardDO extends DurableObject {
       return new Response(null, { status: 101, webSocket: client })
     })
 
+    // Expose the capabilities of the currently connected AimeIO agents so
+    // HTTP controllers can choose compatible Banapass card fields.
+    this.app.get('/:actionId/capabilities', async (c) => {
+      const agents = this.ctx.getWebSockets()
+        .map(capabilitiesForSocket)
+        .filter(capabilities => capabilities.role === 'agent')
+        .map(({ cardProtocol, clientVersion }) => ({ cardProtocol, clientVersion }))
+
+      if (agents.length === 0) {
+        return c.json({ error: 'No active client connected' }, 404)
+      }
+
+      return c.json({ agents }, 200)
+    })
+
     // B. 事件写入路由：只向 Agent 广播，不保存、不重发。
     this.app.post('/:actionId/event', async (c) => {
       const agentWebsockets = this.ctx.getWebSockets().filter(ws => capabilitiesForSocket(ws).role === 'agent')
@@ -170,4 +185,3 @@ export class CardDO extends DurableObject {
 function capabilitiesForSocket(ws: WebSocket): ClientCapabilities {
   return capabilitiesForAttachment(ws.deserializeAttachment())
 }
-
