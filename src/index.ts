@@ -178,7 +178,10 @@ export class CardDO extends DurableObject {
   }
 
   async webSocketClose(ws: WebSocket, code: number, reason: string, wasClean: boolean) {
-    // Attachments are discarded automatically when the socket closes.
+    // Hibernation sockets need the server to finish the closing handshake.
+    // 1005/1006/1015 are reserved and cannot be sent in a close frame.
+    const responseCode = [1005, 1006, 1015].includes(code) ? 1000 : code
+    ws.close(responseCode, reason)
   }
 }
 

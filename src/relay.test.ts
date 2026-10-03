@@ -281,6 +281,18 @@ describe('routeWebSocketMessage', () => {
     expect(routes[1].payload).toBe(e2eeResp)
   })
 
+  it.each(['event.cardStateChanged', 'event.cardConsumed', 'event.ledSet'])(
+    'forwards IO notification %s unchanged to controllers only', method => {
+      const notification = JSON.stringify({
+        jsonrpc: '2.0', method,
+        params: { unit_no: 0, sequence: 1, session_id: 'io-test', timestamp_ms: 1234 },
+      })
+      const routes = routeWebSocketMessage(agentCaps, notification, allSockets, agentSocket)
+      expect(routes.map(route => route.socket.id)).toEqual(['controller-1', 'controller-2'])
+      expect(routes.every(route => route.payload === notification)).toBe(true)
+    }
+  )
+
   it('applies protocol translation when routing SET_CARD_V2 to legacy agents', () => {
     const v2CardMsg = JSON.stringify({
       action: 'SET_CARD_V2',
